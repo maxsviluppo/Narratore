@@ -218,7 +218,7 @@ const SmartMedia = ({ url, type, className, ...props }: { url: string; type: 'im
 };
 
 
-class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean}> {
+class ErrorBoundary extends Component<any, any> {
   constructor(props: any) {
     super(props);
     this.state = { hasError: false };
@@ -250,7 +250,7 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
       );
     }
 
-    return (this.props as any).children;
+    return this.props.children;
   }
 }
 
@@ -2540,6 +2540,8 @@ function App() {
           </div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
         {showSetupModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div 
@@ -2598,6 +2600,7 @@ function App() {
           </div>
         )}
       </AnimatePresence>
+
       <AnimatePresence>
         {showSecurityModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
