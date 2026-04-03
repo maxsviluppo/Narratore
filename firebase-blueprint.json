@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "Story": {
+      "title": "Story",
+      "description": "A narrative story with multiple pages and voice settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "pages": { "type": "array", "items": { "type": "object" } },
+        "createdAt": { "type": "number" },
+        "uid": { "type": "string", "description": "The user ID of the owner" },
+        "voiceConfig": { "type": "object" }
+      },
+      "required": ["title", "pages", "createdAt", "uid", "voiceConfig"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] }
+      },
+      "required": ["uid", "email"]
+    },
+    "StoryPrompt": {
+      "title": "StoryPrompt",
+      "description": "A generated story prompt",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "theme": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "promptText": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "uid", "theme", "promptText", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/stories/{storyId}": {
+      "schema": "Story",
+      "description": "Collection of stories created by users"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/prompts/{promptId}": {
+      "schema": "StoryPrompt",
+      "description": "Collection of generated story prompts"
+    }
+  }
+}
