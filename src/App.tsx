@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Component } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { get, set } from 'idb-keyval';
 import { 
@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 import { generateSpeech } from './lib/tts';
 import { GoogleGenAI, Modality } from "@google/genai";
-import { Story, StoryPage, MOCK_STORIES, StoryPrompt } from './types';
+import { Story, StoryPage, MOCK_STORIES, StoryPrompt, DEFAULT_VOICE_CONFIG } from './types';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import JSZip from 'jszip';
@@ -217,8 +217,9 @@ const SmartMedia = ({ url, type, className, ...props }: { url: string; type: 'im
   );
 };
 
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
-  constructor(props: { children: React.ReactNode }) {
+
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean}> {
+  constructor(props: any) {
     super(props);
     this.state = { hasError: false };
   }
@@ -234,26 +235,26 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-stone-50 p-4">
-          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md text-center">
+        <div className="min-h-screen flex items-center justify-center bg-stone-50 p-6">
+          <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md text-center">
             <h2 className="text-2xl font-bold text-stone-800 mb-4">Ops! Qualcosa è andato storto.</h2>
-            <p className="text-stone-600 mb-6">Si è verificato un errore imprevisto. Prova a ricaricare la pagina.</p>
+            <p className="text-stone-600 mb-6">L'applicazione ha riscontrato un errore imprevisto.</p>
             <button 
               onClick={() => window.location.reload()}
-              className="bg-amber-500 text-white px-6 py-2 rounded-full font-bold hover:bg-amber-600 transition-colors"
+              className="bg-amber-500 text-white px-6 py-2 rounded-full font-bold hover:bg-amber-600 transition-all"
             >
-              Ricarica Pagina
+              Ricarica App
             </button>
           </div>
         </div>
       );
     }
 
-    return this.props.children;
+    return (this.props as any).children;
   }
 }
 
-export default function App() {
+function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [stories, setStories] = useState<Story[]>([]);
@@ -280,6 +281,11 @@ export default function App() {
   const [previewPageIndex, setPreviewPageIndex] = useState(0);
   const [isGeneratingImage, setIsGeneratingImage] = useState<string | null>(null); // pageId
   const [aiImagePromptModal, setAiImagePromptModal] = useState<{ pageIndex: number; mediaIndex: number; prompt: string } | null>(null);
+  const [securitySecret, setSecuritySecret] = useState('');
+  const [showSecurityModal, setShowSecurityModal] = useState(false);
+  const [volume, setVolume] = useState(1.0);
+  const [globalVoiceConfig, setGlobalVoiceConfig] = useState<Story['voiceConfig']>(DEFAULT_VOICE_CONFIG);
+  const [showSetupModal, setShowSetupModal] = useState(false);
   
   const editingStoryRef = useRef(editingStory);
 
@@ -371,12 +377,41 @@ export default function App() {
     };
   }, [user, isAuthReady]);
 
+  // Load/Save Global Config
+  useEffect(() => {
+    get('globalVoiceConfig').then(val => {
+      if (val) setGlobalVoiceConfig(val);
+    });
+  }, []);
+
+  const saveGlobalConfig = async (config: Story['voiceConfig']) => {
+    try {
+      setGlobalVoiceConfig(config);
+      await set('globalVoiceConfig', config);
+      setShowSetupModal(false);
+    } catch (error) {
+      console.error("Failed to save global config:", error);
+    }
+  };
+
   const handleLogin = async () => {
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login failed:", error);
+      // Force account selection to avoid auto-login loops if there's an error
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, provider);
+      console.log("Login successful:", result.user.email);
+    } catch (error: any) {
+      console.error("Login failed detailed:", error);
+      if (error.code === 'auth/unauthorized-domain') {
+        alert(`ERRORE ACCESSO: Il dominio "${window.location.hostname}" non è autorizzato. Vai nella Console Firebase > Authentication > Settings > Authorized Domains e aggiungilo.`);
+      } else if (error.code === 'auth/popup-blocked') {
+        alert("ERRORE ACCESSO: Il browser ha bloccato il popup di accesso. Abilita i popup per questo sito.");
+      } else if (error.code === 'auth/cancelled-popup-request') {
+        // User closed the popup, ignore
+      } else {
+        alert("ERRORE ACCESSO (" + error.code + "): " + error.message);
+      }
     }
   };
 
@@ -386,6 +421,26 @@ export default function App() {
       setCurrentView('dashboard');
     } catch (error) {
       console.error("Logout failed:", error);
+    }
+  };
+
+  const handleSecretLogoutAll = async () => {
+    // SECURITY MASTER LOGOUT: Requires secret "Narratore2026"
+    if (securitySecret !== 'Narratore2026') {
+        alert("Codice Segreto Errato!");
+        return;
+    }
+    
+    try {
+        await signOut(auth);
+        localStorage.clear();
+        sessionStorage.clear();
+        const { clear } = await import('idb-keyval');
+        await clear();
+        alert("Sistema resettato e sessioni chiuse correttamente.");
+        window.location.reload();
+    } catch (error) {
+        console.error("Master logout failed:", error);
     }
   };
 
@@ -428,12 +483,27 @@ export default function App() {
         const storyToSave = { ...currentStory, uid: user.uid };
         setDoc(doc(db, 'stories', currentStory.id), storyToSave)
           .then(() => setLastSaved(new Date()))
-          .catch(err => handleFirestoreError(err, OperationType.WRITE, `stories/${currentStory.id}`));
+          .catch((error) => handleFirestoreError(error, OperationType.UPDATE, 'stories'));
       }
     }, 60000);
 
     return () => clearInterval(interval);
   }, [currentView, editingStory, user]);
+
+  // AUTO-PLAY NARRATION EFFECT
+  useEffect(() => {
+    if (currentView === 'reader' && readingStory && readingStory.pages[currentPageIndex]) {
+      const page = readingStory.pages[currentPageIndex];
+      // Slightly delayed to allow for transition animations
+      const timer = setTimeout(() => {
+        handlePlayPage(page, readingStory.voiceConfig);
+      }, 500);
+      return () => {
+        clearTimeout(timer);
+        window.speechSynthesis.cancel(); // Stop reading if they leave the page/view
+      };
+    }
+  }, [currentView, currentPageIndex, readingStory]);
 
   // Timer per il cambio automatico dei media nella modalità lettura
   useEffect(() => {
@@ -458,12 +528,7 @@ export default function App() {
       title: initialData?.title || '',
       pages: initialData?.pages || [{ id: 'p1', text: '', media: [{ id: 'm1', url: '', type: 'image', duration: 5 }] }],
       createdAt: Date.now(),
-      voiceConfig: {
-        voiceName: 'Kore',
-        emotion: 'dolce e calma',
-        speed: 1.0,
-        pitch: 1.0
-      }
+      voiceConfig: { ...globalVoiceConfig }
     };
     setEditingStory(newStory);
     setCurrentView('editor');
@@ -473,17 +538,32 @@ export default function App() {
     if (!promptTheme.trim()) return;
     setIsGeneratingPrompt(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Genera un prompt creativo per una fiaba per bambini. 
-        Tema: ${promptTheme}
-        Parole chiave: ${promptKeywords}
-        Il prompt deve essere una breve descrizione della trama (max 300 caratteri) che possa ispirare la scrittura della storia.
-        Rispondi solo con il testo del prompt, in italiano.`
+      const apiKey = process.env.DEEPSEEK_API_KEY;
+      if (!apiKey) throw new Error("DeepSeek API Key non trovata.");
+
+      const response = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            {
+              role: 'user',
+              content: `Genera un prompt creativo per una fiaba per bambini. 
+              Tema: ${promptTheme}
+              Parole chiave: ${promptKeywords}
+              Il prompt deve essere una breve descrizione della trama (max 300 caratteri) che possa ispirare la scrittura della storia.
+              Rispondi solo con il testo del prompt, in italiano.`
+            }
+          ]
+        })
       });
 
-      const promptText = response.text || "Errore nella generazione del prompt.";
+      const data = await response.json();
+      const promptText = data.choices?.[0]?.message?.content || "Errore nella generazione del prompt.";
       
       if (user) {
         const newPrompt: StoryPrompt = {
@@ -497,7 +577,8 @@ export default function App() {
         await setDoc(doc(db, 'prompts', newPrompt.id), newPrompt);
       }
     } catch (error) {
-      console.error("Errore generazione prompt:", error);
+      console.error("Errore generazione prompt (DeepSeek):", error);
+      alert("Errore durante la generazione del prompt con DeepSeek. Verifica la chiave o la connessione.");
     } finally {
       setIsGeneratingPrompt(false);
     }
@@ -568,21 +649,15 @@ export default function App() {
     if (!editingStory || !text) return;
     setIsGenerating(true);
     try {
-      const url = await generateSpeech(text, {
+      await generateSpeech(text, {
         voiceName: editingStory.voiceConfig.voiceName,
         speed: editingStory.voiceConfig.speed,
         pitch: editingStory.voiceConfig.pitch,
         emotion: editingStory.voiceConfig.emotion
       });
-      setAudioUrl(url);
-      const audio = new Audio(url);
-      audio.play().catch(e => console.error("Audio playback failed:", e));
     } catch (error: any) {
       console.error("Errore test voce:", error);
-      const message = error.message?.includes('429') 
-        ? "Quota API esaurita (Gemini Flash). Riprova tra un minuto." 
-        : "Errore nella generazione della voce. Verifica la connessione.";
-      alert(message);
+      alert("Errore nella riproduzione vocale. Assicurati che il browser supporti la sintesi vocale.");
     } finally {
       setIsGenerating(false);
     }
@@ -592,9 +667,7 @@ export default function App() {
     if (!page.text) return;
     setIsGenerating(true);
     try {
-      const url = await generateSpeech(page.text, config);
-      const audio = new Audio(url);
-      audio.play().catch(e => console.error("Audio playback failed:", e));
+      await generateSpeech(page.text, config);
     } catch (error) {
       alert("Errore nella riproduzione.");
     } finally {
@@ -606,19 +679,76 @@ export default function App() {
     if (!editingStory) return;
     setIsGenerating(true);
     try {
-      const previewText = `Ciao! Io sono ${editingStory.voiceConfig.voiceName}, la tua voce narrante. Come posso aiutarti oggi?`;
-      const url = await generateSpeech(previewText, {
+      const previewText = `Ciao! Io sono ${editingStory.voiceConfig.voiceName}, la tua voce narrante. Sto leggendo con velocità ${editingStory.voiceConfig.speed.toFixed(1)} e tono ${editingStory.voiceConfig.pitch.toFixed(1)}.`;
+      await generateSpeech(previewText, {
         voiceName: editingStory.voiceConfig.voiceName,
-        speed: 1.0,
-        pitch: 1.0,
-        emotion: "gentile e amichevole"
+        speed: editingStory.voiceConfig.speed,
+        pitch: editingStory.voiceConfig.pitch,
+        emotion: editingStory.voiceConfig.emotion
       });
-      const audio = new Audio(url);
-      audio.play().catch(e => console.error("Audio playback failed:", e));
     } catch (error) {
       alert("Errore nell'anteprima della voce.");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const generateFullStory = async () => {
+    if (!editingStory || !editingStory.title) {
+        alert("Inserisci un titolo prima di generare la storia!");
+        return;
+    }
+    
+    setIsGenerating(true);
+    try {
+        const apiKey = process.env.DEEPSEEK_API_KEY;
+        if (!apiKey) throw new Error("Chiave DeepSeek mancante.");
+
+        const response = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: 'deepseek-chat',
+                messages: [
+                    {
+                        role: 'user',
+                        content: `Scrivi una fiaba breve per bambini in 5 pagine. 
+                        Titolo: ${editingStory.title}
+                        Lingua: Italiano.
+                        Formatta il risultato come un array JSON di oggetti con struttura: [{"text": "testo pagina 1"}, {"text": "testo pagina 2"}, ...].
+                        Ogni pagina deve avere circa 40-60 parole.
+                        Rispondi SOLO con il JSON.`
+                    }
+                ],
+                response_format: { type: 'json_object' }
+            })
+        });
+
+        const data = await response.json();
+        const content = data.choices[0].message.content;
+        const parsed = JSON.parse(content);
+        const storyPages = parsed.pages || parsed; // Handle potential wrappers
+
+        if (Array.isArray(storyPages)) {
+            const newPages: StoryPage[] = storyPages.map((p: any, i: number) => ({
+                id: `p-${Date.now()}-${i}`,
+                text: p.text,
+                media: [{ id: `m-${Date.now()}-${i}`, url: '', type: 'image', duration: 5 }]
+            }));
+
+            setEditingStory({
+                ...editingStory,
+                pages: newPages
+            });
+        }
+    } catch (error) {
+        console.error("Errore Magic Write:", error);
+        alert("Errore nella generazione della storia. Riprova.");
+    } finally {
+        setIsGenerating(false);
     }
   };
 
@@ -784,17 +914,33 @@ export default function App() {
   const suggestImagePrompt = async (pageText: string) => {
     if (!pageText.trim()) return "";
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Basandoti sul seguente testo di una fiaba, scrivi un prompt descrittivo e dettagliato in inglese per un generatore di immagini AI. 
-        Il prompt deve descrivere lo stile (es. illustrazione per bambini, acquerello, fiabesco), i personaggi, l'ambientazione e l'atmosfera.
-        Testo della pagina: "${pageText}"
-        Rispondi solo con il prompt in inglese.`
+      const apiKey = process.env.DEEPSEEK_API_KEY;
+      if (!apiKey) return "";
+
+      const response = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            {
+              role: 'user',
+              content: `Basandoti sul seguente testo di una fiaba, scrivi un prompt descrittivo e dettagliato in inglese per un generatore di immagini AI.
+              Il prompt deve descrivere lo stile (es. illustrazione per bambini, acquerello, fiabesco), i personaggi, l'ambientazione e l'atmosfera.
+              Testo della pagina: "${pageText}"
+              Rispondi solo con il prompt in inglese.`
+            }
+          ]
+        })
       });
-      return response.text?.trim() || "";
+
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content?.trim() || "";
     } catch (error) {
-      console.error("Errore suggerimento prompt:", error);
+      console.error("Errore suggerimento prompt (DeepSeek):", error);
       return "";
     }
   };
@@ -1268,6 +1414,14 @@ export default function App() {
             )}
             
             <button 
+              onClick={() => setShowSetupModal(true)}
+              className="flex items-center gap-2 bg-white text-stone-700 px-3 md:px-4 py-2 rounded-full border border-stone-200 hover:bg-stone-50 transition-all text-xs md:text-sm font-bold shadow-sm"
+            >
+              <Settings className="text-stone-500 w-4 h-4 md:w-[18px] md:h-[18px]" />
+              <span className="hidden sm:inline">Setup</span>
+            </button>
+
+            <button 
               onClick={() => setShowPromptGenerator(true)}
               className="flex items-center gap-2 bg-white text-stone-700 px-3 md:px-4 py-2 rounded-full border border-stone-200 hover:bg-stone-50 transition-all text-xs md:text-sm font-bold shadow-sm"
             >
@@ -1663,13 +1817,23 @@ export default function App() {
                   <div className="space-y-6">
                     <div className="flex justify-between items-center">
                       <label className="text-sm font-medium text-stone-500 uppercase tracking-wider">Pagine</label>
-                      <button 
-                        onClick={addPage}
-                        className="flex items-center gap-1 text-amber-600 font-bold hover:underline text-sm"
-                      >
-                        <Plus size={16} />
-                        Aggiungi Pagina
-                      </button>
+                      <div className="flex gap-4">
+                        <button 
+                          onClick={generateFullStory}
+                          disabled={isGenerating}
+                          className="flex items-center gap-1 text-purple-600 font-bold hover:underline text-sm disabled:opacity-50"
+                        >
+                          <Sparkles size={16} />
+                          Magic Write (DeepSeek)
+                        </button>
+                        <button 
+                          onClick={addPage}
+                          className="flex items-center gap-1 text-amber-600 font-bold hover:underline text-sm"
+                        >
+                          <Plus size={16} />
+                          Aggiungi Pagina
+                        </button>
+                      </div>
                     </div>
 
                     <div className="space-y-8">
@@ -1963,16 +2127,65 @@ export default function App() {
                         <select 
                           value={editingStory?.voiceConfig.voiceName}
                           onChange={(e) => setEditingStory(s => s ? {...s, voiceConfig: {...s.voiceConfig, voiceName: e.target.value as any}} : null)}
-                          className="w-full bg-stone-50 border-none rounded-xl p-3 text-sm md:text-base focus:ring-2 focus:ring-amber-500"
+                          className="w-full bg-stone-50 border-none rounded-xl p-3 text-sm md:text-base focus:ring-2 focus:ring-amber-500 font-medium"
                         >
-                          <option value="Kore">Kore (Donna - Dolce)</option>
-                          <option value="Puck">Puck (Uomo - Calmo)</option>
-                          <option value="Fenrir">Fenrir (Maschile - Profonda e Cupa)</option>
-                          <option value="Charon">Charon (Maschile - Solenne e Oscura)</option>
-                          <option value="Zephyr">Zephyr (Sottile - Aria)</option>
+                          <option value="Kore">Kore (Elsa - Dolce/Narrativa)</option>
+                          <option value="Isabella">Isabella (Online - Naturale)</option>
+                          <option value="Zeus">Zeus (Uomo Anziano - Profonda)</option>
+                          <option value="Gianni">Gianni (Uomo - Profonda)</option>
+                          <option value="Diego">Diego (Energica/Fiaba)</option>
+                          <option value="Puck">Puck (Calmo/Mistero)</option>
+                          <option value="Zephyr">Zephyr (Sottile/Vento)</option>
                         </select>
                       </div>
 
+                      <div className="space-y-4 pt-2">
+                        <div className="flex justify-between text-[11px] font-bold text-stone-400 uppercase">
+                          <span>Velocità: {editingStory?.voiceConfig.speed.toFixed(1)}x</span>
+                          <span>Tono (Pitch): {editingStory?.voiceConfig.pitch.toFixed(1)}x</span>
+                        </div>
+                        <div className="flex gap-4">
+                          <input 
+                            type="range" min="0.5" max="2" step="0.1" 
+                            value={editingStory?.voiceConfig.speed}
+                            onChange={(e) => setEditingStory(s => s ? {...s, voiceConfig: {...s.voiceConfig, speed: parseFloat(e.target.value)}} : null)}
+                            className="flex-1 accent-amber-500"
+                          />
+                          <input 
+                            type="range" min="0" max="2" step="0.1" 
+                            value={editingStory?.voiceConfig.pitch}
+                            onChange={(e) => setEditingStory(s => s ? {...s, voiceConfig: {...s.voiceConfig, pitch: parseFloat(e.target.value)}} : null)}
+                            className="flex-1 accent-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3 pt-4">
+                        <button 
+                          onClick={handlePreviewVoice}
+                          disabled={isGenerating}
+                          className="flex-1 bg-stone-100 text-stone-700 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-stone-200 transition-all border border-stone-200"
+                        >
+                          <Volume2 size={18} />
+                          Prova Voce
+                        </button>
+                        <button 
+                          onClick={() => {
+                            if (editingStory) {
+                              const storyToSave = { ...editingStory, uid: user?.uid };
+                              setDoc(doc(db, 'stories', editingStory.id), storyToSave)
+                                .then(() => {
+                                  setLastSaved(new Date());
+                                  alert("Configurazione voce salvata per questo libro!");
+                                });
+                            }
+                          }}
+                          className="flex-1 bg-amber-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-600 transition-all shadow-md shadow-amber-200"
+                        >
+                          <Save size={18} />
+                          Salva Libro
+                        </button>
+                      </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4 pt-2">
                         <div className="space-y-1">
                           <div className="flex justify-between text-[10px] font-bold text-stone-400 uppercase">
@@ -2101,7 +2314,17 @@ export default function App() {
                   <ChevronLeft size={24} />
                   Dashboard
                 </button>
-                <div className="flex items-center gap-4">
+                {user && (
+                  <button 
+                    onClick={() => setShowSecurityModal(true)}
+                    className="p-2 text-stone-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-all"
+                    title="Sicurezza & Logout Master"
+                  >
+                    <Settings size={20} />
+                  </button>
+                )}
+                {user ? (
+                  <div className="flex items-center gap-4">
                   <button 
                     onClick={() => setShowText(!showText)}
                     className="text-white/80 hover:text-white p-2 rounded-full bg-white/10 backdrop-blur-sm transition-all"
@@ -2117,6 +2340,7 @@ export default function App() {
                     {isGenerating ? <Music className="animate-pulse" size={24} /> : <Volume2 size={24} />}
                   </button>
                 </div>
+                ) : null}
               </div>
 
               <div className="flex-1 relative flex items-center justify-center overflow-hidden">
@@ -2316,7 +2540,115 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-    </div>
+        {showSetupModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold text-stone-800 flex items-center gap-2">
+                  <Settings className="text-amber-500" />
+                  Voice Setup
+                </h3>
+                <button onClick={() => setShowSetupModal(false)} className="p-2 hover:bg-stone-100 rounded-full">
+                  <X />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="space-y-3">
+                  <label className="text-sm font-bold text-stone-600">Voce Predefinita del Narratore</label>
+                  <select 
+                    value={globalVoiceConfig.voiceName}
+                    onChange={(e) => setGlobalVoiceConfig(prev => ({...prev, voiceName: e.target.value as any}))}
+                    className="w-full bg-stone-100 p-3 rounded-xl border-none focus:ring-2 focus:ring-amber-500 font-medium"
+                  >
+                    <option value="Kore">Kore (Donna - Elsa)</option>
+                    <option value="Isabella">Isabella (Neural - Narrativa)</option>
+                    <option value="Zeus">Zeus (Uomo Anziano - Zeus)</option>
+                    <option value="Gianni">Gianni (Uomo - Profonda)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex justify-between text-xs font-bold text-stone-400">
+                    <span>Velocità predefinita</span>
+                    <span className="text-amber-500">{globalVoiceConfig.speed.toFixed(1)}x</span>
+                  </div>
+                  <input 
+                    type="range" min="0.5" max="1.5" step="0.1"
+                    value={globalVoiceConfig.speed}
+                    onChange={(e) => setGlobalVoiceConfig(prev => ({...prev, speed: parseFloat(e.target.value)}))}
+                    className="w-full accent-amber-500"
+                  />
+                </div>
+
+                <button 
+                  onClick={() => saveGlobalConfig(globalVoiceConfig)}
+                  className="w-full bg-stone-800 text-white font-bold py-4 rounded-2xl hover:bg-black transition-all flex items-center justify-center gap-2 shadow-lg"
+                >
+                  <Save size={18} />
+                  Salva Impostazioni Globali
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showSecurityModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold text-stone-800 flex items-center gap-2">
+                  <Settings className="text-red-500" />
+                  Security Center
+                </h3>
+                <button onClick={() => setShowSecurityModal(false)} className="p-2 hover:bg-stone-100 rounded-full">
+                  <X />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="p-4 bg-red-50 rounded-2xl border border-red-100">
+                  <p className="text-sm text-red-700 font-medium">Controllo Accessi & Master Logout</p>
+                  <p className="text-xs text-red-600 mt-1">Questa operazione disconnetterà l'account e pulirà tutti i dati locali (cache, IndexedDB).</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-stone-600">Codice Segreto per Reset Totale</label>
+                  <input 
+                    type="password"
+                    value={securitySecret}
+                    onChange={(e) => setSecuritySecret(e.target.value)}
+                    placeholder="Inserisci il secret..."
+                    className="w-full bg-stone-100 p-3 rounded-xl border-none focus:ring-2 focus:ring-red-500"
+                  />
+                </div>
+
+                <button 
+                  onClick={handleSecretLogoutAll}
+                  className="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 transition-all flex items-center justify-center gap-2"
+                >
+                  <LogOut size={18} />
+                  Chiudi Tutte le Sessioni
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      </div>
     </ErrorBoundary>
   );
 }
+
+export default App;

@@ -19,10 +19,10 @@ export interface Story {
   createdAt: number;
   uid?: string;
   voiceConfig: {
-    voiceName: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr';
-    emotion: string;
+    voiceName: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Isabella' | 'Gianni' | 'Diego' | 'Zeus';
     speed: number;
     pitch: number;
+    emotion: string;
   };
 }
 
@@ -34,6 +34,13 @@ export interface StoryPrompt {
   promptText: string;
   createdAt: number;
 }
+
+export const DEFAULT_VOICE_CONFIG: Story['voiceConfig'] = {
+  voiceName: 'Kore',
+  speed: 1.0,
+  pitch: 1.0,
+  emotion: 'calma e rassicurante'
+};
 
 export const MOCK_STORIES: Story[] = [
   {
